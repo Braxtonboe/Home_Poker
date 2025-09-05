@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>Poker Tracker Dashboard</title>
+  <title>Poker Profit/Loss Dashboard</title>
   <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
   <style>
     body { font-family: Arial, sans-serif; margin: 20px; }
@@ -34,12 +34,14 @@
           // organize data
           rows.forEach(r => {
             const player = r.player_name;
-            const profit = parseFloat(r.profit_loss);
+            const rawProfit = r.profit_loss;
+            const profit = parseFloat(rawProfit);
             const date = r.date;
 
-            if (!players[player]) players[player] = { profits: [], dates: [] };
+            if (!players[player]) players[player] = { profits: [], dates: [], raw: [] };
             players[player].profits.push(profit);
             players[player].dates.push(date);
+            players[player].raw.push(rawProfit);
 
             // single game max/min
             if (profit > biggestSingleWin.value) {
@@ -144,11 +146,22 @@
           });
           Plotly.newPlot('cumulative', cumulativeData, { title: "Cumulative Profit/Loss Over Time" });
 
-          // Average
-          const averageData = Object.keys(players).map(player => {
-            const avg = players[player].profits.reduce((a,b) => a+b,0)/players[player].profits.length;
+          // Average (ignore -0 and 0.0, keep int 0)
+          // Average (ignore -0 and 0.0, keep int 0)
+            const averageData = Object.keys(players).map(player => {
+            const filtered = players[player].profits.map((val, idx) => {
+              const rawVal = String(players[player].raw[idx]); // ensure string
+              const isNegativeZero = Object.is(val, -0);
+              const isZeroFloat = (val === 0 && rawVal.includes("."));
+              return (isNegativeZero || isZeroFloat) ? null : val;
+            }).filter(v => v !== null);
+
+            const sum = filtered.reduce((a,b) => a + b, 0);
+            const avg = filtered.length > 0 ? sum / filtered.length : 0;
             return { x: [player], y: [avg], type:'bar', name: player };
           });
+
+
           Plotly.newPlot('average', averageData, { title: "Average Profit/Loss per Round" });
 
         });
