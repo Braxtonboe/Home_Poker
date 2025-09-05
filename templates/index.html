@@ -5,24 +5,69 @@
   <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
   <style>
     body { font-family: Arial, sans-serif; margin: 20px; }
-    .stats { background: #f2f2f2; padding: 15px; border-radius: 10px; width: 80%; margin-bottom: 20px; }
-    .stat-item { margin: 5px 0; }
-    h1, h2 { margin-bottom: 10px; }
+    .tab { overflow: hidden; border-bottom: 1px solid #ccc; margin-bottom: 20px; }
+    .tab button {
+      background-color: #f2f2f2; float: left; border: none; outline: none;
+      cursor: pointer; padding: 10px 20px; transition: 0.3s; font-size: 16px;
+    }
+    .tab button:hover { background-color: #ddd; }
+    .tab button.active { background-color: #ccc; }
+    .tabcontent { display: none; padding: 10px 0; }
+
+    /* Stats Cards */
+    .stats-cards { display: flex; flex-wrap: wrap; gap: 15px; margin-top: 15px; }
+    .card { flex: 1 1 300px; padding: 15px; border-radius: 10px; color: white; font-weight: bold; }
+    .card.overall { background-color: #4CAF50; }
+    .card.players { background-color: #2196F3; }
+    .card.session { background-color: #FF9800; }
+
+    table { border-collapse: collapse; width: 100%; margin-top: 15px; }
+    th, td { border: 1px solid #ddd; padding: 8px; text-align: center; }
+    th { background-color: #f2f2f2; }
+    tr:nth-child(even){background-color: #f9f9f9;}
   </style>
 </head>
 <body>
   <h1>Poker Profit/Loss Dashboard</h1>
 
-  <div class="stats">
+  <div class="tab">
+    <button class="tablinks" onclick="openTab(event, 'Stats')" id="defaultOpen">Stats</button>
+    <button class="tablinks" onclick="openTab(event, 'Graphs')">Graphs</button>
+    <button class="tablinks" onclick="openTab(event, 'Data')">Log Book</button>
+  </div>
+
+  <!-- Stats Page -->
+  <div id="Stats" class="tabcontent">
     <h2>📊 Stats</h2>
     <div id="summary"></div>
   </div>
 
-  <div id="total" style="width:80%;height:500px;"></div>
-  <div id="cumulative" style="width:80%;height:500px;"></div>
-  <div id="average" style="width:80%;height:500px;"></div>
+  <!-- Graphs Page -->
+  <div id="Graphs" class="tabcontent">
+    <h2>📈 Graphs</h2>
+    <div id="total" style="width:80%;height:400px;margin-bottom:30px;"></div>
+    <div id="cumulative" style="width:80%;height:400px;margin-bottom:30px;"></div>
+    <div id="average" style="width:80%;height:400px;"></div>
+  </div>
+
+  <!-- Data Page -->
+  <div id="Data" class="tabcontent">
+    <h2>📄 Log Book</h2>
+    <div id="csvTable"></div>
+  </div>
 
   <script>
+    function openTab(evt, tabName) {
+      const tabcontent = document.getElementsByClassName("tabcontent");
+      for (let i = 0; i < tabcontent.length; i++) tabcontent[i].style.display = "none";
+      const tablinks = document.getElementsByClassName("tablinks");
+      for (let i = 0; i < tablinks.length; i++) tablinks[i].className = tablinks[i].className.replace(" active", "");
+      document.getElementById(tabName).style.display = "block";
+      evt.currentTarget.className += " active";
+    }
+
+    document.getElementById("defaultOpen").click();
+
     function loadData() {
       fetch("/data")
         .then(res => res.json())
@@ -34,145 +79,123 @@
           // organize data
           rows.forEach(r => {
             const player = r.player_name;
-            const rawProfit = r.profit_loss;
-            const profit = parseFloat(rawProfit);
+            const profit = parseFloat(r.profit_loss);
             const date = r.date;
 
             if (!players[player]) players[player] = { profits: [], dates: [], raw: [] };
             players[player].profits.push(profit);
             players[player].dates.push(date);
-            players[player].raw.push(rawProfit);
+            players[player].raw.push(r.profit_loss);
 
-            // single game max/min
-            if (profit > biggestSingleWin.value) {
-              biggestSingleWin = { player, value: profit, date };
-            }
-            if (profit < biggestSingleLoss.value) {
-              biggestSingleLoss = { player, value: profit, date };
-            }
+            if (profit > biggestSingleWin.value) biggestSingleWin = { player, value: profit, date };
+            if (profit < biggestSingleLoss.value) biggestSingleLoss = { player, value: profit, date };
           });
 
-          // total profit per player
+          // Total per player
           const totals = {};
-          Object.keys(players).forEach(player => {
-            totals[player] = players[player].profits.reduce((a, b) => a + b, 0);
-          });
+          Object.keys(players).forEach(player => totals[player] = players[player].profits.reduce((a,b)=>a+b,0));
 
-          const biggestWinner = Object.keys(totals).reduce((a,b) => totals[a] > totals[b] ? a : b);
-          const biggestLoser = Object.keys(totals).reduce((a,b) => totals[a] < totals[b] ? a : b);
+          const biggestWinner = Object.keys(totals).reduce((a,b) => totals[a]>totals[b]?a:b);
+          const biggestLoser = Object.keys(totals).reduce((a,b) => totals[a]<totals[b]?a:b);
 
-          // --- Hot & Cold Streaks & Current Streaks ---
-          const hotStreaks = {};
-          const coldStreaks = {};
+          // Compute player volatility & streaks
+          const winLossRates = {};
+          const volatility = {};
           const currentStreaks = {};
-
           Object.keys(players).forEach(player => {
-            let longestHot = 0, longestCold = 0;
-            let current = 0; // + for hot, - for cold
-
-            let runningHot = 0, runningCold = 0;
-
+            let wins=0, losses=0, sum=0, sumSq=0, count=0;
+            let streak=0;
             players[player].profits.forEach(val => {
-              if (val > 0) {
-                runningHot++;
-                if (runningHot > longestHot) longestHot = runningHot;
-                runningCold = 0;
-                current = current > 0 ? current + 1 : 1;
-              } else if (val < 0) {
-                runningCold++;
-                if (runningCold > longestCold) longestCold = runningCold;
-                runningHot = 0;
-                current = current < 0 ? current - 1 : -1;
-              } 
-              // val == 0 → ignore
+              if(Object.is(val,-0)) return;
+              if(val>0) wins++; if(val<0) losses++;
+              sum+=val; sumSq+=val*val; count++;
+              streak = val>=0? (streak>0?streak+1:1):(streak<0?streak-1:-1);
             });
-
-            hotStreaks[player] = longestHot;
-            coldStreaks[player] = longestCold;
-            currentStreaks[player] = current;
+            const totalRounds=wins+losses;
+            winLossRates[player] = totalRounds>0? {win:(wins/totalRounds)*100, loss:(losses/totalRounds)*100}:{win:0,loss:0};
+            volatility[player] = count>1? Math.sqrt((sumSq - sum*sum/count)/(count-1)):0;
+            currentStreaks[player] = streak;
           });
 
-          // all-time best/worst streaks
-          const allTimeHotPlayer = Object.keys(hotStreaks).reduce((a,b) => hotStreaks[a] > hotStreaks[b] ? a : b);
-          const allTimeColdPlayer = Object.keys(coldStreaks).reduce((a,b) => coldStreaks[a] > coldStreaks[b] ? a : b);
-
-          // build current streak summary
-          let currentStreakSummary = "<ul>";
-          Object.keys(currentStreaks).forEach(player => {
-            let streak = currentStreaks[player];
-            if (streak > 0) {
-              currentStreakSummary += `<li>${player}: 🔥 ${streak} game winning streak</li>`;
-            } else if (streak < 0) {
-              currentStreakSummary += `<li>${player}: ❄️ ${Math.abs(streak)} game losing streak</li>`;
-            } else {
-              currentStreakSummary += `<li>${player}: no active streak</li>`;
+          // Session winners
+          let sessionTop = {};
+          rows.forEach(r=>{
+            const date=r.date;
+            const profit=parseFloat(r.profit_loss);
+            if(profit>0){
+              if(!sessionTop[date]||profit>sessionTop[date].profit) sessionTop[date]={player:r.player_name,profit};
             }
           });
-          currentStreakSummary += "</ul>";
 
-          // --- Update Stats Panel ---
-          document.getElementById("summary").innerHTML = `
-            <p><b>Biggest Winner:</b> ${biggestWinner} (${totals[biggestWinner].toFixed(2)})</p>
-            <p><b>Biggest Loser:</b> ${biggestLoser} (${totals[biggestLoser].toFixed(2)})</p>
-            <p><b>Biggest Win (Single Game):</b> ${biggestSingleWin.player} (${biggestSingleWin.value.toFixed(2)} on ${biggestSingleWin.date})</p>
-            <p><b>Biggest Loss (Single Game):</b> ${biggestSingleLoss.player} (${biggestSingleLoss.value.toFixed(2)} on ${biggestSingleLoss.date})</p>
-            <p><b>All-Time Best Winning Streak:</b> ${allTimeHotPlayer} (${hotStreaks[allTimeHotPlayer]} games)</p>
-            <p><b>All-Time Worst Losing Streak:</b> ${allTimeColdPlayer} (${coldStreaks[allTimeColdPlayer]} games)</p>
-            <p><b>Current Streaks:</b></p>
-            ${currentStreakSummary}
-          `;
+          // --- Build Cards ---
+          let html = `<div class="stats-cards">`;
 
-          // --- Plot Graphs ---
+          // 1. Overall Stats
+          html+=`<div class="card overall">
+            <b>Overall Stats</b><br>
+            Biggest Winner: ${biggestWinner} ($${totals[biggestWinner].toFixed(2)})<br>
+            Biggest Loser: ${biggestLoser} ($${totals[biggestLoser].toFixed(2)})<br>
+            Single Game Win: ${biggestSingleWin.player} ($${biggestSingleWin.value.toFixed(2)} on ${biggestSingleWin.date})<br>
+            Single Game Loss: ${biggestSingleLoss.player} ($${biggestSingleLoss.value.toFixed(2)} on ${biggestSingleLoss.date})
+          </div>`;
 
-          // Total
-          const totalData = Object.keys(players).map(player => ({
-            x: [player],
-            y: [totals[player]],
-            type: 'bar',
-            name: player
-          }));
+          // 2. Player Stats
+          let playerHtml=`<b>Players Stats</b><br><ul>`;
+          Object.keys(players).forEach(p=>{
+            playerHtml+=`<li>${p}: Streak ${currentStreaks[p]>0? "🔥"+currentStreaks[p]:"❄️"+Math.abs(currentStreaks[p])}, Volatility $${volatility[p].toFixed(2)}</li>`;
+          });
+          playerHtml+=`</ul>`;
+          html+=`<div class="card players">${playerHtml}</div>`;
+
+          // 3. Session Winners
+          let sessionHtml=`<b>Session Winners</b><br><ul>`;
+          Object.keys(sessionTop).sort().forEach(date=>{
+            const s=sessionTop[date];
+            sessionHtml+=`<li>${s.player}: $${s.profit.toFixed(2)} on ${date}</li>`;
+          });
+          sessionHtml+=`</ul>`;
+          html+=`<div class="card session">${sessionHtml}</div>`;
+
+          html+=`</div>`; // close stats-cards
+          document.getElementById("summary").innerHTML = html;
+
+          // --- Graphs ---
+          const totalData = Object.keys(players).map(p=>({x:[p],y:[totals[p]],type:'bar',name:p}));
           Plotly.newPlot('total', totalData, { title: "Total Profit/Loss per Player" });
 
-          // Cumulative
-          const cumulativeData = Object.keys(players).map(player => {
-            let cumulative = [];
-            players[player].profits.reduce((a,b,i) => cumulative[i] = a+b, 0);
-            return {
-              x: players[player].dates,
-              y: cumulative,
-              mode: 'lines+markers',
-              name: player
-            };
+          const cumulativeData = Object.keys(players).map(p=>{
+            let cum=[]; players[p].profits.reduce((a,b,i)=>cum[i]=a+b,0);
+            return {x:players[p].dates,y:cum,mode:'lines+markers',name:p};
           });
           Plotly.newPlot('cumulative', cumulativeData, { title: "Cumulative Profit/Loss Over Time" });
 
-          // Average (ignore -0 and 0.0, keep int 0)
-          // Average (ignore -0 and 0.0, keep int 0)
-            const averageData = Object.keys(players).map(player => {
-            const filtered = players[player].profits.map((val, idx) => {
-              const rawVal = String(players[player].raw[idx]); // ensure string
-              const isNegativeZero = Object.is(val, -0);
-              const isZeroFloat = (val === 0 && rawVal.includes("."));
-              return (isNegativeZero || isZeroFloat) ? null : val;
-            }).filter(v => v !== null);
-
-            const sum = filtered.reduce((a,b) => a + b, 0);
-            const avg = filtered.length > 0 ? sum / filtered.length : 0;
-            return { x: [player], y: [avg], type:'bar', name: player };
+          const averageData = Object.keys(players).map(p=>{
+            const filtered = players[p].profits.map((val,idx)=>{
+              const rawVal=String(players[p].raw[idx]);
+              const isNegZero=Object.is(val,-0);
+              const isZeroFloat=(val===0 && rawVal.includes("."));
+              return (isNegZero||isZeroFloat)?null:val;
+            }).filter(v=>v!==null);
+            const avg=filtered.length>0?filtered.reduce((a,b)=>a+b,0)/filtered.length:0;
+            return {x:[p],y:[avg],type:'bar',name:p};
           });
-
-
           Plotly.newPlot('average', averageData, { title: "Average Profit/Loss per Round" });
+
+          // --- CSV Table ---
+          let tableHtml="<table><tr><th>Player</th><th>Profit/Loss</th><th>Date</th></tr>";
+          rows.forEach(r=>{
+            const profit=parseFloat(r.profit_loss);
+            if(Object.is(profit,-0)) return;
+            tableHtml+=`<tr><td>${r.player_name}</td><td>${profit.toFixed(2)}</td><td>${r.date}</td></tr>`;
+          });
+          tableHtml+="</table>";
+          document.getElementById("csvTable").innerHTML=tableHtml;
 
         });
     }
 
-    // Initial load
     loadData();
-
-    // Auto-refresh every 10 seconds
     setInterval(loadData, 10000);
-
   </script>
 </body>
 </html>
