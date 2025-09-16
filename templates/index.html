@@ -140,7 +140,22 @@
           // Compute player volatility & streaks
           const winLossRates = {};
           const volatility = {};
-          const currentStreaks = {};
+          // Helper function for longest streaks
+          function getLongestStreak(arr, isWin) {
+            let max = 0, cur = 0;
+            arr.forEach(val => {
+              if ((isWin && val > 0) || (!isWin && val < 0)) {
+                cur++;
+                if (cur > max) max = cur;
+              } else {
+                cur = 0;
+              }
+            });
+            return max;
+          }
+
+          const longestWinStreaks = {};
+          const longestLossStreaks = {};
           Object.keys(players).forEach(player => {
             let wins=0, losses=0, sum=0, sumSq=0, count=0;
             let streak=0;
@@ -151,10 +166,25 @@
               streak = val>=0? (streak>0?streak+1:1):(streak<0?streak-1:-1);
             });
             const totalRounds=wins+losses;
-            winLossRates[player] = totalRounds>0? {win:(wins/totalRounds)*100, loss:(losses/totalRounds)*100}:{win:0,loss:0};
+            winLossRates[player] = {win:wins, total:totalRounds, loss:losses};
             volatility[player] = count>1? Math.sqrt((sumSq - sum*sum/count)/(count-1)):0;
+            longestWinStreaks[player] = getLongestStreak(players[player].profits, true);
+            longestLossStreaks[player] = getLongestStreak(players[player].profits, false);
+          });
+
+          // Restore current streaks for player cards
+          const currentStreaks = {};
+          Object.keys(players).forEach(player => {
+            let streak = 0;
+            players[player].profits.forEach(val => {
+              if (Object.is(val, -0)) return;
+              streak = val >= 0 ? (streak > 0 ? streak + 1 : 1) : (streak < 0 ? streak - 1 : -1);
+            });
             currentStreaks[player] = streak;
           });
+
+          const allTimeLongestWinner = Object.keys(longestWinStreaks).reduce((a,b) => longestWinStreaks[a] > longestWinStreaks[b] ? a : b);
+          const allTimeLongestLoser = Object.keys(longestLossStreaks).reduce((a,b) => longestLossStreaks[a] > longestLossStreaks[b] ? a : b);
 
           // Session winners
           let sessionTop = {};
@@ -177,6 +207,10 @@
               <div class="stat-value">Biggest Loser: <span class="negative">${biggestLoser} ($${totals[biggestLoser].toFixed(2)})</span></div>
               <div class="stat-value">🎯 Single Game Win: ${biggestSingleWin.player} ($${biggestSingleWin.value.toFixed(2)} on ${biggestSingleWin.date})</div>
               <div class="stat-value">💀 Single Game Loss: ${biggestSingleLoss.player} ($${biggestSingleLoss.value.toFixed(2)} on ${biggestSingleLoss.date})</div>
+              <div class="stat-value">🔥 All-Time Longest Winning Streak: 
+                ${allTimeLongestWinner} (${longestWinStreaks[allTimeLongestWinner]} Wins)</div>
+              <div class="stat-value">❄️ All-Time Longest Losing Streak: 
+                ${allTimeLongestLoser} (${longestLossStreaks[allTimeLongestLoser]} Losses)</div>
             </div>
           `;
 
@@ -196,6 +230,7 @@
                 <span style="color:${color};font-size:14px;">${streak}</span><br>
                 <small>Volatility: $${vol}</small>
                 <div id="${sparkId}" class="sparkline"></div>
+                  Win/Loss Ratio: <span class="positive">${winLossRates[p].win}</span> - <span class="negative">${winLossRates[p].loss}</span>
               </div>
             `;
           });
