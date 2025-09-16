@@ -145,6 +145,7 @@
             let max = 0, cur = 0;
             arr.forEach(val => {
               if (val === 0) return; // skip zeros, don't reset streak
+
               if ((isWin && val > 0) || (!isWin && val < 0)) {
                 cur++;
                 if (cur > max) max = cur;
@@ -179,6 +180,7 @@
             let streak = 0;
             players[player].profits.forEach(val => {
               if (Object.is(val, -0)) return;
+
               if (val === 0) return; // skip zeros, don't reset streak
               streak = val > 0 ? (streak > 0 ? streak + 1 : 1) : (streak < 0 ? streak - 1 : -1);
             });

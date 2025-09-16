@@ -69,14 +69,14 @@ tk.Label(root, text="Profit/Loss").grid(row=1, column=1, padx=5, pady=5)
 # Load players from CSV
 player_names = load_players()
 
-# Fill up to 8 slots, add empty if needed
-while len(player_names) < 8:
+# Fill up to 9 slots, add empty if needed
+while len(player_names) < 9:
     player_names.append("")
 
 name_entries = []
 profit_entries = []
 
-for i in range(8):
+for i in range(9):
     name_entry = tk.Entry(root, width=20)
     name_entry.insert(0, player_names[i])  # pre-fill name
     name_entry.grid(row=i+2, column=0, padx=5, pady=5)
@@ -87,6 +87,6 @@ for i in range(8):
     name_entries.append(name_entry)
     profit_entries.append(profit_entry)
 
-tk.Button(root, text="Submit", command=submit, width=20, bg="green", fg="white").grid(row=10, column=0, columnspan=2, pady=20)
+tk.Button(root, text="Submit", command=submit, width=20, bg="green", fg="white").grid(row=13, column=0, columnspan=2, pady=20)
 
 root.mainloop()
