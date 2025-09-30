@@ -288,11 +288,143 @@
           const totalData = Object.keys(players).map(p=>({x:[p],y:[totals[p]],type:'bar',name:p}));
           Plotly.newPlot('total', totalData, { title: "Total Profit/Loss per Player" });
 
-          const cumulativeData = Object.keys(players).map(p=>{
-            let cum=[]; players[p].profits.reduce((a,b,i)=>cum[i]=a+b,0);
-            return {x:players[p].dates,y:cum,mode:'lines+markers',name:p};
+          // Build cumulative traces per player.
+          // Robust date parsing: support common formats (ISO, MM/DD, MM/DD/YY, MM-DD-YYYY).
+          function parseDateStr(s) {
+            if (!s && s !== 0) return null;
+            s = String(s).trim();
+            if (s === '') return null;
+            // try native parser first
+            let d = new Date(s);
+            if (!isNaN(d.getTime())) return d;
+            // replace dashes with slashes and try again (e.g., 2025-09-30)
+            d = new Date(s.replace(/-/g, '/'));
+            if (!isNaN(d.getTime())) return d;
+            // try MM/DD[/YYYY] or M/D[/YY]
+            const m = s.match(/^(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?$/);
+            if (m) {
+              let mm = parseInt(m[1], 10) - 1;
+              let dd = parseInt(m[2], 10);
+              let yy = m[3] ? parseInt(m[3], 10) : (new Date()).getFullYear();
+              if (yy < 100) yy += 2000;
+              const ddObj = new Date(yy, mm, dd);
+              if (!isNaN(ddObj.getTime())) return ddObj;
+            }
+            // try YYYYMMDD
+            const y = s.match(/^(\d{4})(\d{2})(\d{2})$/);
+            if (y) {
+              const ddObj = new Date(parseInt(y[1],10), parseInt(y[2],10)-1, parseInt(y[3],10));
+              if (!isNaN(ddObj.getTime())) return ddObj;
+            }
+            return null;
+          }
+
+          const cumulativeData = Object.keys(players).map(p => {
+            const entriesRaw = players[p].profits.map((val, idx) => ({
+              dateStr: players[p].dates[idx],
+              profit: Number(val),
+              idx
+            }));
+
+            let skipped = 0;
+            // parse dates with fallback; if parse fails, keep the original index ordering
+            const entries = entriesRaw.map(e => {
+              const parsed = parseDateStr(e.dateStr);
+              if (parsed) return { date: parsed, dateStr: parsed.toISOString(), profit: e.profit, idx: e.idx };
+              // fallback: try native again and still accept if possible
+              const native = new Date(e.dateStr);
+              if (!isNaN(native.getTime())) return { date: native, dateStr: native.toISOString(), profit: e.profit, idx: e.idx };
+              // couldn't parse -> mark as null but keep index for stable ordering
+              skipped++;
+              return { date: null, dateStr: String(e.dateStr), profit: e.profit, idx: e.idx };
+            });
+
+            // entries with date != null will be sorted by date; entries with null dates will keep their original order and be placed after dated entries
+            const withDates = entries.filter(e => e.date !== null).sort((a,b) => a.date - b.date);
+            const withoutDates = entries.filter(e => e.date === null).sort((a,b)=>a.idx - b.idx);
+            const all = withDates.concat(withoutDates);
+
+            if (all.length === 0) return { x: [], y: [], mode: 'lines', name: p };
+
+            // compute cumulative sum, downsample if necessary
+            const maxPoints = 2000;
+            const n = all.length;
+            const step = n > maxPoints ? Math.ceil(n / maxPoints) : 1;
+
+            const x = [];
+            const y = [];
+            let acc = 0;
+            for (let i = 0; i < n; i++) {
+              const item = all[i];
+              // still accept non-finite profits as zeros
+              const profit = Number.isFinite(item.profit) ? item.profit : 0;
+              acc += profit;
+              if (i % step === 0 || i === n - 1) {
+                // if parsed date exists use ISO (time axis); otherwise use original string but prefix with index to avoid collisions
+                x.push(item.date ? item.date.toISOString() : `unknown-${item.idx}-${item.dateStr}`);
+                y.push(acc);
+              }
+            }
+
+            if (skipped) console.debug(`${p} had ${skipped} unparsable dates (kept as-is in order)`);
+
+            return { x, y, mode: 'lines', name: p, line: { width: 2 }, hoverinfo: 'name+ x + y' };
           });
-          Plotly.newPlot('cumulative', cumulativeData, { title: "Cumulative Profit/Loss Over Time" });
+
+          Plotly.newPlot('cumulative', cumulativeData, {
+            title: "Cumulative Profit/Loss Over Time",
+            xaxis: { tickangle: -45, type: 'date' },
+            legend: { orientation: 'h' },
+            margin: { t: 40 }
+          }).then(function() {
+            // Show markers only when hovering a point to keep the lines clean.
+            const gd = document.getElementById('cumulative');
+            // initialize traces with invisible markers (if not already set)
+            const initialOpacities = cumulativeData.map(t => {
+              const n = t.y ? t.y.length : 0;
+              return Array(n).fill(0);
+            });
+            // apply initial marker opacity arrays
+            initialOpacities.forEach((arr, i) => {
+              if (arr.length) Plotly.restyle(gd, {'marker.opacity': [arr]}, i);
+            });
+
+            let last = {trace: null, arr: null};
+
+            gd.on('plotly_hover', function(eventData) {
+              if (!eventData || !eventData.points || !eventData.points.length) return;
+              const p = eventData.points[0];
+              const traceIndex = p.curveNumber;
+              const pointIndex = p.pointIndex;
+
+              // reset previous trace marker opacities
+              if (last.trace !== null && last.trace !== traceIndex) {
+                const resetArr = Array(last.arr.length).fill(0);
+                Plotly.restyle(gd, {'marker.opacity': [resetArr]}, last.trace);
+                last = {trace: null, arr: null};
+              }
+
+              // build opacity array for this trace
+              const ylen = (gd.data && gd.data[traceIndex] && gd.data[traceIndex].y) ? gd.data[traceIndex].y.length : 0;
+              if (ylen === 0) return;
+              const op = Array(ylen).fill(0);
+              op[pointIndex] = 1; // visible marker at hovered point
+
+              Plotly.restyle(gd, {'marker.opacity': [op]}, traceIndex);
+              last = {trace: traceIndex, arr: op};
+            });
+
+            gd.on('plotly_unhover', function(eventData) {
+              if (!eventData || !eventData.points || !eventData.points.length) return;
+              const p = eventData.points[0];
+              const traceIndex = p.curveNumber;
+              const ylen = (gd.data && gd.data[traceIndex] && gd.data[traceIndex].y) ? gd.data[traceIndex].y.length : 0;
+              if (ylen === 0) return;
+              const resetArr = Array(ylen).fill(0);
+              Plotly.restyle(gd, {'marker.opacity': [resetArr]}, traceIndex);
+              if (last.trace === traceIndex) last = {trace: null, arr: null};
+            });
+          });
 
           const averageData = Object.keys(players).map(p=>{
             const filtered = players[p].profits.map((val,idx)=>{
